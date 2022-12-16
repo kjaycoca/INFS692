@@ -1,0 +1,114 @@
+---
+title: "Data Science Final Project"
+subtitle: "MODEL 2: Network-based Classification Model."
+author: "Kjay O. Coca"
+date: "2022-12-14"
+output: pdf_document
+---
+
+## LOAD PACKAGES
+```{r, warning=FALSE}
+library(dplyr)
+library(keras)
+library(tfruns) 
+library(rsample) 
+library(tfestimators) 
+library(readr)
+```
+
+## IMPORTING THE DATA
+```{r}
+set.seed(123)
+radiomics_data <- read_csv("D:/1 MASTERS/STAT225/FINAL PROJECT/STAT 325 _FINAL PROJECT_/Normalize Radiomics Data.csv")
+```
+
+## SPLITTING FOR TRAINING AND TESTING
+```{r}
+for_splitted  <-  sample(1:nrow(radiomics_data), round(nrow(radiomics_data) * 0.8))
+radiomicsdata_train <- radiomics_data[for_splitted,]
+radiomicsdata_test  <- radiomics_data[-for_splitted,]
+```
+In this case, I set 80 percent for training data and 20 percent for testing data. There are 39 observation for testing and 158 observation for training and both have 413 variables.
+
+
+## Set the X & Y Train and Test
+```{r}
+X_train <- radiomicsdata_train[,-c(1,2)]%>%as.matrix.data.frame()
+X_test <- radiomicsdata_test[,-c(1,2)]%>%as.matrix.data.frame()
+y_train <- radiomicsdata_train$Failure.binary
+y_test <- radiomicsdata_test$Failure.binary
+```
+
+## Reshaping the dataset
+```{r, warning=FALSE}
+X_train <- array_reshape(X_train, c(nrow(X_train), ncol(X_train)))
+X_train <- X_train 
+
+X_test <- array_reshape(X_test, c(nrow(X_test), ncol(X_test)))
+X_test <- X_test 
+
+y_train <- to_categorical(y_train, num_classes = 2)
+y_test <- to_categorical(y_test, num_classes = 2)
+```
+
+
+## Five hidden layer
+```{r, warning=FALSE}
+nbc_model <- keras_model_sequential() %>%
+  layer_dense(units = 256, activation = "sigmoid", input_shape = c(ncol(X_train))) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 128, activation = "sigmoid") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "sigmoid") %>% 
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 64, activation = "sigmoid") %>% 
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 2, activation = "softmax")
+```
+Create five hidden layers with 256, 128, 128, 64 and 64 neurons, respectively with activation functions of Sigmoid. Create an output layer with two neurons respectively with activation functions of Softmax. Every layer is followed by a dropout to avoid overfitting.
+
+
+## Backpropagation
+```{r}
+ 
+nbc_model %>% 
+
+compile(
+    loss = "categorical_crossentropy",
+    optimizer = optimizer_rmsprop(),
+    metrics = c("accuracy")
+  )
+```
+
+
+## Compile the Model
+```{r}
+ nbc_model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = optimizer_adam(),
+  metrics = c("accuracy")
+)
+
+history <- nbc_model %>% 
+  fit(X_train, y_train, epochs = 10, batch_size = 128, validation_split = 0.15)
+```
+Above is the training of the model with epoch = 10, batch size = 128 and validation split = 0.15. The accuracy is 0.6250 or 62.50 percent.
+
+
+## Evaluate the trained model 
+```{r}
+nbc_model %>%
+  evaluate(X_test, y_test)
+dim(X_test)
+dim(y_test)
+```
+Upon evaluating the trained model using the testing dataset, the accuracy is 0.6154 or just 61.54 percent.
+
+
+## Model prediction
+This are the model prediction.
+```{r}
+nbc_model   %>% predict(X_test) %>% `>`(0.8) %>% k_cast("int32")
+```
