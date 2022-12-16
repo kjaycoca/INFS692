@@ -1,0 +1,175 @@
+---
+title: "Data Science Final Project"
+subtitle: "MODEL 1B: SVM"
+author: "Kjay O. Coca"
+date: "2022-12-14"
+output: pdf_document
+---
+
+
+```{r}
+# Helper packages
+library(dplyr)    # for data wrangling
+library(ggplot2)  # for awesome graphics
+library(rsample)  # for data splitting
+library(readr)
+
+# Modeling packages
+library(caret)    # for classification and regression training
+library(kernlab)  # for fitting SVMs
+library(modeldata) #for Failure.binary data
+library(forcats)
+
+# Model interpretability packages
+library(pdp)      # for partial dependence plots, etc.
+library(vip)      # for variable importance plots
+```
+
+```{r}
+set.seed(123)
+radiomics_data <- read_csv("D:/1 MASTERS/STAT225/FINAL PROJECT/STAT 325 _FINAL PROJECT_/Normalize Radiomics Data.csv")
+```
+
+## Load Failure.binary data
+```{r}
+radiomics_data$Failure.binary=as.factor(radiomics_data$Failure.binary)
+```
+
+## SPLITTING FOR TRAINING AND TESTING
+```{r}
+set.seed(123)  # for reproducibility
+for_split <- initial_split(radiomics_data, prop = 0.8, strata = "Failure.binary")
+radiomicsdata_train <- training(for_split)
+radiomicsdata_test  <- testing(for_split)
+```
+In this case, I set 80 percent for training data and 20 percent for testing data. There are 39 observation for testing and 158 observation for training and both have 413 variables.
+
+
+## Linear
+```{r}
+caret::getModelInfo("svmLinear")$svmLinear$parameters
+```
+
+## Polynomial kernel
+```{r}
+caret::getModelInfo("svmPoly")$svmPoly$parameters
+```
+
+## Radial basis kernel
+```{r}
+caret::getModelInfo("svmRadial")$svmRadial$parameters
+```
+
+### Run SVM Model in Training phase
+```{r, warning=FALSE}
+set.seed(1854) 
+svm_split <- train(
+  Failure.binary ~ ., 
+  data = radiomicsdata_train,
+  method = "svmRadial",               
+  preProcess = c("center", "scale"),  
+  trControl = trainControl(method = "cv", number = 10),
+  tuneLength = 10
+)
+```
+Using `split_train()` function, tuning SVM model with radial basis kernel. Using `split_train()` function, we can tune an SVM model with radial basis kernel.
+
+## Plot results
+```{r}
+ggplot(svm_split) + theme_light()
+```
+
+
+## Print results
+```{r}
+svm_split$results
+```
+
+
+## Control parameters for SVM
+```{r}
+class.weights = c("No" = 1, "Yes" = 10)
+ctrl <- trainControl(
+  method = "cv", 
+  number = 10, 
+  classProbs = TRUE,                 
+  summaryFunction = twoClassSummary  
+)
+
+radiomicsdata_train$Failure.binary <- fct_recode(radiomicsdata_train$Failure.binary,No="0",Yes="1")
+
+```
+
+
+## Print the AUC values during Training
+```{r}
+# Tune an SVM
+set.seed(123)  # for reproducibility
+train_svm_auc <- train(
+  Failure.binary ~ ., 
+  data = radiomicsdata_train,
+  method = "svmRadial",               
+  preProcess = c("center", "scale"),  
+  metric = "ROC",  # area under ROC curve (AUC)       
+  trControl = ctrl,
+  tuneLength = 10
+)
+
+# Print results
+train_svm_auc$results
+confusionMatrix(train_svm_auc)
+```
+The average accuracy of the trained model is 0.828 or 82.8 percent.
+
+
+## Print the Top 20 important features during Training
+```{r}
+prob_yes <- function(object, newdata) {
+  predict(object, newdata = newdata, type = "prob")[, "Yes"]
+}
+
+# Variable importance plot
+set.seed(2827)  # for reproducibility
+vip(train_svm_auc, method = "permute", nsim = 5, train = radiomicsdata_train, 
+    target = "Failure.binary", metric = "auc", reference_class = "Yes", 
+    pred_wrapper = prob_yes)
+```
+
+This are the top 20 important variable during Training. Failure variable is the most important. And next is Entrophy_cooc.W.ADC.
+
+
+```{r}
+features <- setdiff(names(radiomics_data), names(radiomics_data)[c(1,2)])
+pdps <- lapply(features, function(x) {
+  partial(train_svm_auc, pred.var = x, which.class = 2,  
+          prob = TRUE, plot = TRUE, plot.engine = "ggplot2") +
+    coord_flip()
+})
+
+grid.arrange(grobs = pdps,  ncol = 2)
+```
+
+## Print the AUC values during Testing
+
+```{r}
+radiomicsdata_test$Failure.binary=fct_recode(radiomicsdata_test$Failure.binary,No="0",Yes="1")
+
+# Tune an SVM with radial 
+set.seed(5628)  # for reproducibility
+test_svm_auc <- train(
+  Failure.binary ~ ., 
+  data = radiomicsdata_test,
+  method = "svmRadial",               
+  preProcess = c("center", "scale"),  
+  metric = "ROC",  # area under ROC curve (AUC)       
+  trControl = ctrl,
+  tuneLength = 10
+)
+
+# Print results
+test_svm_auc$results
+confusionMatrix(test_svm_auc)
+```
+The accuracy of test data in this model is 0.625 or just 62.5 percent. It smaller compare to trained data.
+
+
