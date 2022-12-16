@@ -1,0 +1,400 @@
+---
+title: "Data Science Final Project"
+subtitle: "MODEL 1C: Gradient Boosting"
+author: "Kjay O. Coca"
+date: "2022-12-16"
+output: pdf_document
+---
+
+
+## LOAD PACKAGES
+```{r, warning = F}
+# Load Packages
+library(dplyr)    # for general data wrangling needs
+library(tidyverse)# for filtering 
+library(rsample)   # for creating validation splits
+library(h2o)      # for a java-based implementation of GBM variants
+library(xgboost)  # for fitting extreme gradient boosting
+library(gbm)      # for original implementation of regular and stochastic GBMs
+library(ROCR)
+library(pROC)
+library(recipes)
+```
+
+
+## IMPORTING THE DATA
+```{r}
+set.seed(123)
+radiomics_data <- read_csv("D:/1 MASTERS/STAT225/FINAL PROJECT/STAT 325 _FINAL PROJECT_/Normalize Radiomics Data.csv")
+```
+
+## SPLITTING FOR TRAINING AND TESTING
+```{r}
+radiomics_data$Institution=as.factor(radiomics_data$Institution)
+to_split <- initial_split(radiomics_data, strata = "Failure.binary")
+radiomicsdata_train <- training(to_split)
+radiomicsdata_test <- testing(to_split)
+```
+In this case, I set 80 percent for training data and 20 percent for testing data. There are 39 observation for testing and 158 observation for training and both have 413 variables.
+
+
+## GB Model 1
+```{r}
+GB_model1 <- gbm(
+  formula = Failure.binary ~ .,
+  data = radiomicsdata_train,
+  distribution = "bernoulli",  # SSE loss function
+  n.trees = 500,
+  shrinkage = 0.1,
+  n.minobsinnode = 10,
+  cv.folds = 10
+
+)
+```
+
+## FIND INDEX FOR NUMBER TREES WITH MINIMUM CV ERROR
+```{r}
+best_gbm <- which.min(GB_model1$cv.error)
+```
+
+## PLOTTING THE ERROR CURVE
+```{r}
+gbm.perf(GB_model1, method = "cv")
+```
+
+## CREATE GRID SEARCH
+```{r}
+hyper_grid <- expand.grid(
+  learning_rate = c(0.3, 0.1, 0.05, 0.01, 0.005),
+  logloss = NA,
+  trees = NA,
+  time = NA
+)
+```
+
+## EXECUTE GRID SEARCH
+```{r}
+for(i in seq_len(nrow(hyper_grid))) {
+  # fit gbm
+  set.seed(123)  # for reproducibility
+  train_time <- system.time({
+    m <- gbm(
+      formula = Failure.binary ~ .,
+      data = radiomicsdata_train,
+      distribution = "bernoulli",
+      n.trees = 500, 
+      shrinkage = hyper_grid$learning_rate[i], 
+      interaction.depth = 3, 
+      n.minobsinnode = 10,
+      cv.folds = 10 
+    )
+  })
+  
+  # adding SSE, trees, and training time to results
+  hyper_grid$logloss[i]  <- sqrt(min(m$cv.error))
+  hyper_grid$trees[i] <- which.min(m$cv.error)
+  hyper_grid$Time[i]  <- train_time[["elapsed"]]
+  
+}
+```
+
+
+## RESULTS
+```{r}
+arrange(hyper_grid, logloss)
+```
+
+## SEARCH GRID
+```{r}
+hyper_grid <- expand.grid(
+  n.trees = 600,
+  shrinkage = 0.01,
+  interaction.depth = c(3, 5, 7),
+  n.minobsinnode = c(5, 10, 15)
+
+)
+```
+
+## CREATING THE MODEL FIT FUNCTION
+```{r}
+model_fit <- function(n.trees, shrinkage, interaction.depth, n.minobsinnode) {
+  set.seed(123)
+  m <- gbm(
+    formula = Failure.binary ~ .,
+    data = radiomicsdata_train,
+    distribution = "bernoulli",
+    n.trees = n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 10
+  )
+  # compute RMSE
+  sqrt(min(m$cv.error))
+
+}
+```
+
+## PERFORMING SEARCH GRID WITH FUNCTIONAL PROGRAMMING
+```{r}
+hyper_grid$logloss <- purrr::pmap_dbl(
+  hyper_grid,
+  ~ model_fit(
+    n.trees = ..1,
+    shrinkage = ..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+
+# RESULTS 
+arrange(hyper_grid, logloss)
+```
+
+## REFINED HYPERPARAMETER GRID
+```{r}
+hyper_grid <- list(
+  sample_rate = c(0.5, 0.75, 1),              # row subsampling
+  col_sample_rate = c(0.5, 0.75, 1),          # col subsampling for each split
+  col_sample_rate_per_tree = c(0.5, 0.75, 1)  # col subsampling for each tree
+)
+```
+
+
+## random grid search strategy
+```{r}
+# random grid search strategy
+search_criteria <- list(
+  strategy = "RandomDiscrete",
+  stopping_metric = "logloss",
+  stopping_tolerance = 0.001,   
+  stopping_rounds = 10,         
+  max_runtime_secs = 60*60      
+)
+```
+
+## PERFORMING GRID SEARCH
+```{r}
+radiomicsdata_train$Failure.binary=as.factor(radiomicsdata_train$Failure.binary)
+h2o.init()
+grid <- h2o.grid(
+  algorithm = "gbm",
+  grid_id = "gbm_grid",
+  y = "Failure.binary",
+  training_frame = as.h2o(radiomicsdata_train),
+  hyper_params = hyper_grid,
+  ntrees = 10,#supposedly 6000
+  learn_rate = 0.01,
+  max_depth = 7,
+  min_rows = 5,
+  nfolds = 10,
+  stopping_rounds = 10,
+  stopping_tolerance = 0,
+  stopping_metric="logloss",
+  search_criteria = search_criteria,
+  seed = 123
+
+)
+```
+
+## COLLECT THE RESULTS AND SORT BY OUR MODEL PERFORMANCE METRIC OF CHOICE
+```{r}
+grid_perf <- h2o.getGrid(
+  grid_id = "gbm_grid", 
+  sort_by = "logloss", 
+  decreasing = FALSE
+)
+grid_perf
+```
+
+
+## GRAB THE MODEL_ID FOR THE TOP MODEL, CHOSEN BY CROSS VALIDATION ERROR
+```{r}
+best_model_id <- grid_perf@model_ids[[1]]
+best_model <- h2o.getModel(best_model_id)
+
+# GETTING THE PERFORMANCE METRICS ON THE BEST MODEL
+
+h2o.performance(model = best_model, xval = TRUE)
+```
+
+
+```{r}
+xgb_prep <- recipe(Failure.binary ~ ., data = radiomicsdata_train) %>%
+  step_integer(all_nominal()) %>%
+  prep(training = radiomicsdata_train, retain = TRUE) %>%
+  juice()
+
+X <- as.matrix(xgb_prep[setdiff(names(xgb_prep), "Failure.binary")])
+Y <- xgb_prep$Failure.binary
+Y=as.numeric(Y)-1
+```
+
+
+```{r}
+set.seed(123)
+radiomics_xgb <- xgb.cv(
+  data = X,
+  label = Y,
+  nrounds = 6000,
+  objective = "binary:logistic",
+  early_stopping_rounds = 50, 
+  nfold = 10,
+  params = list(
+    eta = 0.1,
+    max_depth = 3,
+    min_child_weight = 3,
+    subsample = 0.8,
+    colsample_bytree = 1.0),
+  verbose = 0
+)
+
+```
+
+# MINIMUM TEST CV RMSE
+```{r}
+min(radiomics_xgb$evaluation_log$test_logloss_mean)
+```
+The RMSE is 0.2128.
+
+## Hyperparameter grid
+```{r}
+hyper_grid <- expand.grid(
+  eta = 0.01,
+  max_depth = 3, 
+  min_child_weight = 3,
+  subsample = 0.5, 
+  colsample_bytree = 0.5,
+  gamma = c(0, 1, 10, 100, 1000),
+  lambda = c(0, 1e-2, 0.1, 1, 100, 1000, 10000),
+  alpha = c(0, 1e-2, 0.1, 1, 100, 1000, 10000),
+  logloss = 0,          # a place to dump RMSE results
+  trees = 0          # a place to dump required number of trees
+)
+
+# grid search
+for(i in seq_len(nrow(hyper_grid))) {
+  set.seed(123)
+  m <- xgb.cv(
+    data = X,
+    label = Y,
+    nrounds = 100,#supposedly 4000
+    objective = "binary:logistic",
+    early_stopping_rounds = 50, 
+    nfold = 10,
+    verbose = 0,
+    params = list( 
+      eta = hyper_grid$eta[i], 
+      max_depth = hyper_grid$max_depth[i],
+      min_child_weight = hyper_grid$min_child_weight[i],
+      subsample = hyper_grid$subsample[i],
+      colsample_bytree = hyper_grid$colsample_bytree[i],
+      gamma = hyper_grid$gamma[i], 
+      lambda = hyper_grid$lambda[i], 
+      alpha = hyper_grid$alpha[i]
+    ) 
+  )
+  hyper_grid$logloss[i] <- min(m$evaluation_log$test_logloss_mean)
+  hyper_grid$trees[i] <- m$best_iteration
+}
+```
+
+
+## Results
+```{r}
+hyper_grid %>%
+  filter(logloss > 0) %>%
+  arrange(logloss) %>%
+  glimpse()
+```
+
+
+## Optimal parameter list
+```{r}
+params <- list(
+  eta = 0.01,
+  max_depth = 3,
+  min_child_weight = 3,
+  subsample = 0.5,
+  colsample_bytree = 0.5
+)
+```
+
+
+```{r}
+xgb_final_model <- xgboost(
+  params = params,
+  data = X,
+  label = Y,
+  nrounds = 394,
+  objective = "binary:logistic",
+  verbose = 0
+)
+```
+
+
+## Compute predicted probabilities on training data
+```{r}
+pred_prob1 <- predict(xgb_final_model, X, type = "prob")
+```
+
+
+## Compute AUC metrics for cv_model1,2 and 3 
+```{r}
+perf1 <- prediction(pred_prob1,radiomicsdata_train$Failure.binary) %>%
+  performance(measure = "tpr", x.measure = "fpr")
+```
+
+
+## Plot ROC curves for cv_model1,2 and 3
+```{r}
+plot(perf1, col = "black", lty = 2)
+```
+
+
+## ROC plot for training data
+```{r}
+roc( radiomicsdata_train$Failure.binary ~ pred_prob1, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+
+xgb_prep <- recipe(Failure.binary ~ ., data = radiomicsdata_test) %>%
+  step_integer(all_nominal()) %>%
+  prep(training = radiomicsdata_test, retain = TRUE) %>%
+  juice()
+
+X <- as.matrix(xgb_prep[setdiff(names(xgb_prep), "Failure.binary")])
+```
+The accuracy of training data using the model is 99.7 percent.
+
+## Compute predicted probabilities on training data
+```{r}
+pred_prob2 <- predict(xgb_final_model, X, type = "prob")
+```
+
+
+## Compute AUC metrics for cv_model1,2 and 3 
+```{r}
+perf2 <- prediction(pred_prob2,radiomicsdata_test$Failure.binary) %>%
+  performance(measure = "tpr", x.measure = "fpr")
+```
+
+
+## Plot ROC curves for cv_model1,2 and 3 
+```{r}
+plot(perf2, col = "black", lty = 2)
+```
+
+## ROC plot for training data
+```{r}
+roc( radiomicsdata_test$Failure.binary ~ pred_prob2, plot=TRUE, legacy.axes=FALSE, 
+    percent=TRUE, col="black", lwd=2, print.auc=TRUE)
+
+```
+The accuracy of testing data using the model is 83.4 percent.
+
+
+```{r}
+# variable importance plot
+vip::vip(xgb_final_model,num_features=20) 
+```
+The most important variable is the Entropy_cooc.W.ADC
