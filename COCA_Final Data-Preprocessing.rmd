@@ -1,0 +1,93 @@
+---
+title: "Data Science Final Project"
+subtitle: "DATA PREPROCESSING"
+author: "Kjay O. Coca"
+date: "2022-12-16"
+output: pdf_document
+---
+
+```{r}
+pacman::p_load(tidyverse)
+pacman::p_load(bestNormalize)
+```
+
+
+```{r}
+radiomics_data = read_csv("D:/1 MASTERS/STAT225/FINAL PROJECT/normalRad.csv")
+```
+
+
+```{r}
+sum(is.na(radiomics_data))
+```
+
+
+```{r,warning=F}
+radiomics_data1=radiomics_data%>%select_if(is.numeric)
+radiomics_data1=radiomics_data1[,-1]
+radiomics_data2=apply(radiomics_data1,2,function(x){ks.test(x,"pnorm")})
+```
+
+```{r}
+KS_list=unlist(lapply(radiomics_data2, function(x) x$p.value))
+```
+
+
+```{r}
+sum(KS_list<0.05)
+```
+
+
+```{r}
+sum(KS_list>0.05)
+```
+
+```{r}
+which.max(KS_list)
+```
+
+```{r,warning=F}
+tempradiomics_data=radiomics_data[,c(3,5:length(names(radiomics_data)))]
+
+tempradiomics_data=apply(tempradiomics_data,2,orderNorm)
+tempradiomics_data=lapply(tempradiomics_data, function(x) x$x.t)
+tempradiomics_data=tempradiomics_data%>%as.data.frame()
+test=apply(tempradiomics_data,2,shapiro.test)
+test=unlist(lapply(test, function(x) x$p.value))
+```
+
+
+```{r,warning=F}
+sum(test>0.05)
+```
+
+
+```{r,warning=F}
+sum(test<0.05)
+```
+
+
+```{r}
+radiomics_data[,c(3,5:length(names(radiomics_data)))]=tempradiomics_data
+```
+
+
+```{r}
+CorMatrix=cor(radiomics_data[,-c(1,2)])
+heatmap(CorMatrix,Rowv=NA,Colv=NA,scale="none",revC = T)
+```
+
+
+```{r}
+radiomics_data$Institution=as.factor(radiomics_data$Institution)
+radiomics_data$Failure.binary=as.factor(radiomics_data$Failure.binary)
+```
+
+```{r}
+splitter <- sample(1:nrow(radiomics_data), round(nrow(radiomics_data) * 0.8))
+trainradiomics_data <- radiomics_data[splitter, ]
+testradiomics_data  <- radiomics_data[-splitter, ]
+```
+
+
+
